@@ -87,7 +87,9 @@ const ALIMENTACION = [
 const CATS = {
   Tomas: 'gota', Medicamentos: 'pastilla', Vacunas: 'jeringa', 'Controles médicos': 'esteto', 'Sueño': 'luna', 'Pañales': 'brillo', Otro: 'brillo',
 };
-const REPETIR = { una: 'Una vez', diaria: 'Cada día', c3h: 'Cada 3 horas' };
+const REPETIR = { una: 'Una vez', c3h: 'Cada 3 horas', c8h: 'Cada 8 horas', c12h: 'Cada 12 horas', diaria: 'Cada día' };
+// Repeticiones por horas: clave → horas entre avisos.
+const CADA_HORAS = { c3h: 3, c8h: 8, c12h: 12 };
 const CATS_DOC = { 'Exámenes': 'esteto', Recetas: 'doc', Vacunas: 'jeringa', Identidad: 'persona', 'Seguro / Isapre': 'doc', Otros: 'carpeta' };
 const TIPOS = { toma: ['Toma', 'c2'], sueno: ['Sueño', 'c1'], panal: ['Pañal', 'c3'] };
 
@@ -137,7 +139,8 @@ const saludo = () => { const h = new Date().getHours(); return h < 6 ? 'Buenas n
 function proxima(r) {
   const f = new Date(r.fecha).getTime(), ahora = Date.now();
   if (r.rep === 'diaria') { const d = new Date(f); const n = new Date(); n.setHours(d.getHours(), d.getMinutes(), 0, 0); if (n < ahora - 6e4) n.setDate(n.getDate() + 1); return n.getTime(); }
-  if (r.rep === 'c3h' && f < ahora) return f + Math.ceil((ahora - f) / 108e5) * 108e5;
+  const h = CADA_HORAS[r.rep];
+  if (h && f < ahora) { const paso = h * 36e5; return f + Math.ceil((ahora - f) / paso) * paso; }
   return f;
 }
 const aLocal = d => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
@@ -569,7 +572,8 @@ function hojaVerDoc(d) {
 function ics({ titulo, inicio, alertaMin = 0, rep, lugar, uidEvento }) {
   const f = d => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const limpiar = s => String(s || '').replace(/[\\,;]/g, m => '\\' + m).replace(/\n/g, '\\n');
-  const reglas = { diaria: 'RRULE:FREQ=DAILY', c3h: 'RRULE:FREQ=HOURLY;INTERVAL=3' };
+  const reglas = { diaria: 'RRULE:FREQ=DAILY' };
+  for (const [k, h] of Object.entries(CADA_HORAS)) reglas[k] = `RRULE:FREQ=HOURLY;INTERVAL=${h}`;
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Mama Planner//ES', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
     `UID:${uidEvento}@mamaplanner`, `DTSTAMP:${f(Date.now())}`, `DTSTART:${f(inicio)}`, `DTEND:${f(inicio + (rep ? 9e5 : 36e5))}`,
     `SUMMARY:${limpiar(titulo)}`, lugar ? `LOCATION:${limpiar(lugar)}` : '', reglas[rep] || '',
