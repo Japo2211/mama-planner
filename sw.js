@@ -1,5 +1,5 @@
 // Guarda la app en el teléfono para que funcione sin internet.
-const CACHE = 'mama-planner-v1';
+const CACHE = 'mama-planner-v2';
 const ARCHIVOS = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 

@@ -343,7 +343,9 @@ function vBebe() {
       <button class="fila" data-a="verRegistro" data-id="${r.id}">
         <span class="linea-hora">${fmtHora(r.inicio)}</span>
         <i class="punto" style="background:var(--${{ toma: 'acento2', sueno: 'acento', panal: 'acento3' }[r.tipo]})"></i>
-        <span class="cuerpo"><div class="t">${TIPOS[r.tipo][0]}</div><div class="s">${det(r)}</div></span></button>`).join('')}</div>`
+        <span class="cuerpo"><div class="t">${TIPOS[r.tipo][0]}</div><div class="s">${det(r)}</div></span>
+        <span class="suave" aria-hidden="true">${ic('der', 'style="width:18px;height:18px"')}</span></button>`).join('')}</div>
+      <p class="etiqueta" style="text-align:center;margin:10px 0 0">Toca un registro para corregir la hora o la duración.</p>`
       : vacio('corazon', 'Sin registros', hoy ? 'Usa los botones de arriba para anotar el día.' : 'No hay registros este día.')}</section>`;
 }
 
@@ -437,7 +439,8 @@ function hojaToma() {
 function guardarToma(seg, manual) {
   const c = S.crono, fin = Date.now(), inicio = manual ? fin - seg * 1000 : c.inicio;
   const d = duracion(Math.max(seg, 60));
-  S.registros.push({ id: uid(), tipo: 'toma', inicio, fin: inicio + seg * 1000, detalle: c.pecho ? `Pecho ${c.lado.toLowerCase()} · ${d}` : `Biberón · ${H.ml} ml · ${d}` });
+  S.registros.push({ id: uid(), tipo: 'toma', inicio, fin: inicio + seg * 1000, pecho: c.pecho, lado: c.lado, ml: H.ml,
+    detalle: c.pecho ? `Pecho ${c.lado.toLowerCase()} · ${d}` : `Biberón · ${H.ml} ml · ${d}` });
   Object.assign(c, { inicio: 0, tramo: 0, acum: 0 });
   guardar(); cerrarHoja(); avisar('Toma guardada');
 }
@@ -487,13 +490,63 @@ function hojaItem(tipo, id) {
       ${tipo === 'rec' && x.rep === 'una' ? `<button class="btn" data-a="marcarHecho" data-id="${id}">${ic('check', 'style="width:18px;height:18px"')}Marcar como hecho</button>` : ''}
       <button class="btn-texto" data-a="borrarItem" data-tipo="${tipo}" data-id="${id}">Eliminar</button></div>`;
 }
-function hojaRegistro(id) {
-  const r = S.registros.find(x => x.id === id);
+// ===== Editar un registro de la línea del día =====
+const E = {};
+// Registros antiguos guardaban todo en el texto; se recuperan los datos de ahí.
+function datosToma(r) {
+  const d = r.detalle || '';
+  const pecho = r.pecho ?? !/biber|mamadera/i.test(d);
+  const lado = r.lado || (d.match(/izquierdo|derecho|ambos/i) || ['Izquierdo'])[0];
+  const ml = r.ml || +(d.match(/(\d+)\s*ml/) || [0, 90])[1];
+  return { pecho, lado: lado.charAt(0).toUpperCase() + lado.slice(1).toLowerCase(), ml };
+}
+function prepararEdicion(r) {
+  const min = r.fin ? Math.max(1, Math.round((r.fin - r.inicio) / 6e4)) : 15;
+  Object.assign(E, { id: r.id, tipo: r.tipo, inicio: aLocal(r.inicio), fin: r.fin ? aLocal(r.fin) : aLocal(Date.now()),
+    durmiendo: r.tipo === 'sueno' && !r.fin, min, panal: r.detalle || 'Pipí', error: '' });
+  if (r.tipo === 'toma') Object.assign(E, datosToma(r));
+}
+function hojaRegistro() {
+  const r = S.registros.find(x => x.id === E.id);
   if (!r) return cab('');
-  return cab(TIPOS[r.tipo][0], ['Cerrar', 'cerrarHoja']) + `<div class="tarjeta">
-      <div class="serif" style="font-size:22px">${fmtHora(r.inicio)}${r.fin && r.tipo !== 'panal' ? ' – ' + fmtHora(r.fin) : ''}</div>
-      <div class="suave">${r.tipo === 'sueno' ? (r.fin ? duracion((r.fin - r.inicio) / 1000) : 'Durmiendo ahora') : esc(r.detalle)}</div></div>
-    <button class="btn-texto" style="margin-top:16px" data-a="borrarRegistro" data-id="${id}">Eliminar registro</button>`;
+  const ahora = aLocal(Date.now());
+  let campos = '';
+  if (E.tipo === 'toma') {
+    campos = `
+      <div class="segmentos">
+        <button data-a="eTipo" data-v="1" aria-pressed="${E.pecho}">${ic('corazon')}Pecho</button>
+        <button data-a="eTipo" data-v="0" aria-pressed="${!E.pecho}">${ic('biberon')}Biberón</button></div>
+      ${E.pecho ? `<div class="segmentos suaves">${['Izquierdo', 'Derecho', 'Ambos'].map(l =>
+        `<button data-a="eLado" data-v="${l}" aria-pressed="${E.lado === l}">${l}</button>`).join('')}</div>` : ''}
+      <div class="lista formulario">
+        <label>Hora de inicio <input type="datetime-local" data-e="inicio" value="${E.inicio}" max="${ahora}"></label></div>
+      ${stepper('Duración', `${E.min} min`, 'eMin')}
+      ${!E.pecho ? stepper('Cantidad', `${E.ml} ml`, 'eMl') : ''}`;
+  } else if (E.tipo === 'sueno') {
+    campos = `
+      <div class="lista formulario">
+        <label>Se durmió <input type="datetime-local" data-e="inicio" value="${E.inicio}" max="${ahora}"></label>
+        ${E.durmiendo ? '' : `<label>Despertó <input type="datetime-local" data-e="fin" value="${E.fin}" max="${ahora}"></label>`}</div>
+      <div class="segmentos suaves">
+        <button data-a="eDurmiendo" data-v="1" aria-pressed="${E.durmiendo}">Sigue durmiendo</button>
+        <button data-a="eDurmiendo" data-v="0" aria-pressed="${!E.durmiendo}">Ya despertó</button></div>
+      <p class="etiqueta" style="text-align:center;margin:0" data-e-dur>${duracionEdicion()}</p>`;
+  } else {
+    campos = `
+      <div class="segmentos suaves">${['Pipí', 'Caca', 'Ambos'].map(v =>
+        `<button data-a="ePanal" data-v="${v}" aria-pressed="${E.panal === v}">${v}</button>`).join('')}</div>
+      <div class="lista formulario">
+        <label>Hora <input type="datetime-local" data-e="inicio" value="${E.inicio}" max="${ahora}"></label></div>`;
+  }
+  return cab(`Editar ${TIPOS[E.tipo][0].toLowerCase()}`, ['Cancelar', 'cerrarHoja'], ['Guardar', 'guardarEdicion']) + `
+    <div class="pila" style="gap:16px">${campos}
+      ${E.error ? `<p class="etiqueta" role="alert" style="color:var(--acento3);text-align:center;margin:0">${E.error}</p>` : ''}
+      <button class="btn-texto" data-a="borrarRegistro" data-id="${E.id}">Eliminar registro</button></div>`;
+}
+function duracionEdicion() {
+  if (E.durmiendo) return `Durmiendo desde las ${fmtHora(new Date(E.inicio))}`;
+  const s = (new Date(E.fin) - new Date(E.inicio)) / 1000;
+  return s > 0 ? `Durmió ${duracion(s)}` : 'La hora de despertar debe ser después de la de dormir';
 }
 
 // Documentos
@@ -592,7 +645,32 @@ const A = {
   despertar() { const r = S.registros.find(x => x.tipo === 'sueno' && !x.fin); if (r) { r.fin = Date.now(); guardar(); vibrar(); render(); avisar(`Durmió ${duracion((r.fin - r.inicio) / 1000)}`); } },
   hojaPanal() { abrirHoja(hojaPanal); },
   panal(el) { S.registros.push({ id: uid(), tipo: 'panal', inicio: Date.now(), detalle: el.dataset.v }); guardar(); cerrarHoja(); avisar('Pañal anotado'); },
-  verRegistro(el) { abrirHoja(() => hojaRegistro(el.dataset.id)); },
+  verRegistro(el) { const r = S.registros.find(x => x.id === el.dataset.id); if (r) { prepararEdicion(r); abrirHoja(hojaRegistro); } },
+  eTipo(el) { E.pecho = el.dataset.v === '1'; refrescarHoja(); },
+  eLado(el) { E.lado = el.dataset.v; refrescarHoja(); },
+  eMin(el) { E.min = Math.min(180, Math.max(1, E.min + +el.dataset.v)); refrescarHoja(); },
+  eMl(el) { E.ml = Math.min(300, Math.max(10, E.ml + 10 * el.dataset.v)); refrescarHoja(); },
+  ePanal(el) { E.panal = el.dataset.v; refrescarHoja(); },
+  eDurmiendo(el) { E.durmiendo = el.dataset.v === '1'; if (!E.durmiendo && new Date(E.fin) <= new Date(E.inicio)) E.fin = aLocal(Date.now()); refrescarHoja(); },
+  guardarEdicion() {
+    const r = S.registros.find(x => x.id === E.id); if (!r) return cerrarHoja();
+    const inicio = new Date(E.inicio).getTime();
+    if (!inicio) { E.error = 'Elige una hora válida'; return refrescarHoja(); }
+    if (inicio > Date.now() + 6e4) { E.error = 'La hora no puede ser en el futuro'; return refrescarHoja(); }
+    if (r.tipo === 'toma') {
+      const d = duracion(E.min * 60);
+      Object.assign(r, { inicio, fin: inicio + E.min * 6e4, pecho: E.pecho, lado: E.lado, ml: E.ml,
+        detalle: E.pecho ? `Pecho ${E.lado.toLowerCase()} · ${d}` : `Biberón · ${E.ml} ml · ${d}` });
+    } else if (r.tipo === 'sueno') {
+      const fin = E.durmiendo ? null : new Date(E.fin).getTime();
+      if (fin !== null && !(fin > inicio)) { E.error = 'La hora de despertar debe ser después de la de dormir'; return refrescarHoja(); }
+      if (E.durmiendo && S.registros.some(x => x.tipo === 'sueno' && !x.fin && x.id !== r.id)) { E.error = 'Ya hay otro sueño en curso'; return refrescarHoja(); }
+      Object.assign(r, { inicio, fin });
+    } else {
+      Object.assign(r, { inicio, detalle: E.panal });
+    }
+    UI.dia = inicio; guardar(); cerrarHoja(); avisar('Cambios guardados');
+  },
   borrarRegistro(el) { if (confirm('¿Eliminar este registro?')) { S.registros = S.registros.filter(r => r.id !== el.dataset.id); guardar(); cerrarHoja(); } },
   // Agenda
   hojaNuevoAgenda() { abrirHoja(hojaNuevoAgenda); },
@@ -700,6 +778,10 @@ document.addEventListener('change', e => {
   if (t.dataset.aCambio) CAMBIOS[t.dataset.aCambio](t);
   else if (t.dataset.campo) { S.perfil[t.dataset.campo] = t.value; guardar(); if (S.perfil.listo || t.type === 'date') render(); }
   else if (t.dataset.f) { F[t.dataset.f] = t.value; }
+  else if (t.dataset.e) {
+    E[t.dataset.e] = t.value; E.error = '';
+    const d = $hoja.querySelector('[data-e-dur]'); if (d) d.textContent = duracionEdicion();
+  }
 });
 document.addEventListener('input', e => {
   const t = e.target;
