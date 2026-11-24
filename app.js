@@ -121,7 +121,9 @@ function hace(d) {
   if (min < 1) return 'recién';
   if (min < 60) return `hace ${min} min`;
   const h = Math.floor(min / 60);
-  return `hace ${h} ${h === 1 ? 'hora' : 'horas'}`;
+  if (h < 24) return `hace ${h} ${h === 1 ? 'hora' : 'horas'}`;
+  const dias = Math.floor(h / 24);
+  return `hace ${dias} ${dias === 1 ? 'día' : 'días'}`;
 }
 function edad(nac) {
   if (!nac) return '';
@@ -164,7 +166,12 @@ const $app = document.getElementById('app');
 
 function render() {
   aplicarTema();
+  // Conserva la posición de desplazamiento de cada pestaña al redibujar.
+  const scrolls = {};
+  $app.querySelectorAll('.pagina').forEach(p => scrolls[p.dataset.tab] = p.scrollTop);
+  document.body.classList.toggle('principal', S.perfil.listo);
   $app.innerHTML = S.perfil.listo ? vistaPrincipal() : vistaOnboarding();
+  $app.querySelectorAll('.pagina').forEach(p => p.scrollTop = scrolls[p.dataset.tab] || 0);
   if (!S.perfil.listo) enfocarCampo();
   tic();
 }
@@ -262,12 +269,79 @@ function enfocarCampo() {
 
 // ===== Vista principal =====
 const TABS = [['inicio', 'casa', 'Inicio'], ['agenda', 'calendario', 'Agenda'], ['bebe', 'corazon', 'Bebé'], ['carpeta', 'carpeta', 'Carpeta'], ['perfil', 'persona', 'Perfil']];
+// Las 5 pestañas van una al lado de otra; se pasa de una a otra deslizando el dedo.
+const idxTab = () => Math.max(0, TABS.findIndex(t => t[0] === UI.tab));
 function vistaPrincipal() {
   const vistas = { inicio: vInicio, agenda: vAgenda, bebe: vBebe, carpeta: vCarpeta, perfil: vPerfil };
-  return `<main class="pantalla" id="contenido">${vistas[UI.tab]()}</main>
-    <nav class="pestanas" aria-label="Secciones">${TABS.map(([k, i, n]) =>
-      `<button data-a="tab" data-v="${k}" ${UI.tab === k ? 'aria-current="page"' : ''}>${ic(i)}${n}</button>`).join('')}</nav>`;
+  const i = idxTab();
+  return `<div class="visor-pag"><div class="carril" style="transform:translate3d(${-i * 100}%,0,0)">
+      ${TABS.map(([k]) => `<section class="pagina" data-tab="${k}" ${k === UI.tab ? '' : 'aria-hidden="true" inert'}>
+        <div class="pantalla">${vistas[k]()}</div></section>`).join('')}</div></div>
+    <nav class="pestanas" aria-label="Secciones"><span class="indicador" style="transform:translate3d(${i * 100}%,0,0)"></span>
+      ${TABS.map(([k, ic_, n]) => `<button data-a="tab" data-v="${k}" ${UI.tab === k ? 'aria-current="page"' : ''}>${ic(ic_)}${n}</button>`).join('')}</nav>`;
 }
+
+// Mueve el carril a una pestaña con animación, sin redibujar el contenido.
+function irATab(i, animar = true) {
+  i = Math.max(0, Math.min(TABS.length - 1, i));
+  const carril = $app.querySelector('.carril'), ind = $app.querySelector('.indicador');
+  if (!carril) return;
+  const cambio = TABS[i][0] !== UI.tab;
+  UI.tab = TABS[i][0];
+  for (const el of [carril, ind]) el.style.transition = animar ? '' : 'none';
+  carril.style.transform = `translate3d(${-i * 100}%,0,0)`;
+  ind.style.transform = `translate3d(${i * 100}%,0,0)`;
+  $app.querySelectorAll('.pagina').forEach(p => {
+    const activa = p.dataset.tab === UI.tab;
+    p.toggleAttribute('inert', !activa); activa ? p.removeAttribute('aria-hidden') : p.setAttribute('aria-hidden', 'true');
+  });
+  $app.querySelectorAll('.pestanas button').forEach(b => b.dataset.v === UI.tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  if (cambio) vibrar();
+}
+
+// ===== Gesto: deslizar a la izquierda o derecha para cambiar de pestaña =====
+(() => {
+  let g = null;
+  const ignorar = el => el.closest('input, select, textarea, .chips, .segmentos, .reloj, [data-sin-desliz]');
+  $app.addEventListener('pointerdown', e => {
+    if (!S.perfil.listo || e.button > 0 || !e.isPrimary || ignorar(e.target)) return;
+    const carril = $app.querySelector('.carril'); if (!carril || !carril.contains(e.target)) return;
+    g = { x: e.clientX, y: e.clientY, t: e.timeStamp, dx: 0, eje: null, carril, ind: $app.querySelector('.indicador'), ancho: carril.offsetWidth, i: idxTab(), id: e.pointerId };
+  });
+  $app.addEventListener('pointermove', e => {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.eje) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      g.eje = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y';
+      if (g.eje === 'y') { g = null; return; }
+      try { g.carril.setPointerCapture(e.pointerId); } catch (_) {}
+      g.carril.style.transition = g.ind.style.transition = 'none';
+      g.carril.classList.add('arrastrando');
+    }
+    // Resistencia en los bordes (primera y última pestaña).
+    const enBorde = (g.i === 0 && dx > 0) || (g.i === TABS.length - 1 && dx < 0);
+    g.dx = enBorde ? dx / 3 : dx;
+    const pct = g.dx / g.ancho * 100;
+    g.carril.style.transform = `translate3d(calc(${-g.i * 100}% + ${g.dx}px),0,0)`;
+    g.ind.style.transform = `translate3d(${g.i * 100 - pct}%,0,0)`;
+  });
+  const soltar = e => {
+    if (!g || e.pointerId !== g.id) return;
+    const { dx, eje, i, carril, ancho, t } = g; g = null;
+    if (eje !== 'x') return;
+    carril.classList.remove('arrastrando');
+    const vel = Math.abs(dx) / Math.max(1, e.timeStamp - t);
+    const pasar = Math.abs(dx) > ancho * 0.22 || (vel > 0.45 && Math.abs(dx) > 30);
+    irATab(pasar ? i + (dx < 0 ? 1 : -1) : i);
+    // Evita que el gesto termine "tocando" un botón.
+    const bloquear = ev => { ev.stopPropagation(); ev.preventDefault(); };
+    window.addEventListener('click', bloquear, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', bloquear, { capture: true }), 50);
+  };
+  $app.addEventListener('pointerup', soltar);
+  $app.addEventListener('pointercancel', soltar);
+})();
 
 function botonesRegistro() {
   const c = S.crono, sueno = S.registros.find(r => r.tipo === 'sueno' && !r.fin);
@@ -397,12 +471,54 @@ function vacio(icono, t, txt) {
 const $hoja = document.getElementById('hoja'), $fondo = document.getElementById('hoja-fondo');
 let hojaActual = null;
 function abrirHoja(fn) {
-  hojaActual = fn; $hoja.innerHTML = fn(); $hoja.hidden = false; $fondo.hidden = false;
+  hojaActual = fn; $hoja.innerHTML = fn(); $hoja.scrollTop = 0;
+  $hoja.classList.remove('saliendo'); $fondo.classList.remove('saliendo'); $hoja.style.transform = '';
+  $hoja.hidden = false; $fondo.hidden = false;
   document.body.style.overflow = 'hidden'; tic();
 }
-function refrescarHoja() { if (hojaActual && !$hoja.hidden) { $hoja.innerHTML = hojaActual(); tic(); } }
-function cerrarHoja() { $hoja.hidden = true; $fondo.hidden = true; hojaActual = null; document.body.style.overflow = ''; render(); }
+function refrescarHoja() {
+  if (!hojaActual || $hoja.hidden) return;
+  const y = $hoja.scrollTop; $hoja.innerHTML = hojaActual(); $hoja.scrollTop = y; tic();
+}
+let cerrando = false;
+function cerrarHoja() {
+  if (cerrando || $hoja.hidden) { render(); return; }
+  cerrando = true; hojaActual = null;
+  $hoja.classList.add('saliendo'); $fondo.classList.add('saliendo');
+  setTimeout(() => {
+    $hoja.hidden = true; $fondo.hidden = true; $hoja.style.transform = '';
+    $hoja.classList.remove('saliendo'); $fondo.classList.remove('saliendo');
+    document.body.style.overflow = ''; cerrando = false; render();
+  }, 240);
+}
 $fondo.addEventListener('click', cerrarHoja);
+
+// Cerrar una hoja deslizándola hacia abajo.
+(() => {
+  let h = null;
+  $hoja.addEventListener('pointerdown', e => {
+    if (!e.isPrimary || e.target.closest('input, select, textarea, button, label')) return;
+    if ($hoja.scrollTop > 0) return;
+    h = { y: e.clientY, t: e.timeStamp, dy: 0, activo: false, id: e.pointerId };
+  });
+  $hoja.addEventListener('pointermove', e => {
+    if (!h || e.pointerId !== h.id) return;
+    const dy = e.clientY - h.y;
+    if (!h.activo) { if (dy < 8) { if (dy < -8) h = null; return; } h.activo = true; try { $hoja.setPointerCapture(e.pointerId); } catch (_) {} }
+    h.dy = Math.max(0, dy);
+    $hoja.style.transition = 'none'; $hoja.style.transform = `translateY(${h.dy}px)`;
+    $fondo.style.opacity = String(Math.max(0, 1 - h.dy / 400));
+  });
+  const fin = e => {
+    if (!h || e.pointerId !== h.id) return;
+    const { dy, activo, t } = h; h = null; if (!activo) return;
+    $hoja.style.transition = ''; $fondo.style.opacity = '';
+    if (dy > 110 || dy / Math.max(1, e.timeStamp - t) > 0.6) cerrarHoja();
+    else $hoja.style.transform = '';
+  };
+  $hoja.addEventListener('pointerup', fin);
+  $hoja.addEventListener('pointercancel', fin);
+})();
 const cab = (titulo, izq = ['Cancelar', 'cerrarHoja'], der = null) => `<div class="hoja-cab">
   <button data-a="${izq[1]}">${izq[0]}</button><h2 class="serif">${titulo}</h2>
   ${der ? `<button data-a="${der[1]}" ${der[2] ? 'disabled' : ''} style="font-weight:500">${der[0]}</button>` : '<span style="min-width:76px"></span>'}</div>`;
@@ -630,7 +746,11 @@ const A = {
   setModo(el) { S.perfil.modo = el.dataset.v; guardar(); render(); },
   reiniciarOnb() { if (confirm('¿Repetir las preguntas de bienvenida? No se borra ningún registro.')) { S.perfil.listo = false; UI.paso = 0; guardar(); render(); } },
   // Navegación
-  tab(el) { UI.tab = el.dataset.v; UI.dia = Date.now(); render(); scrollTo(0, 0); },
+  tab(el) {
+    const i = TABS.findIndex(t => t[0] === el.dataset.v);
+    if (el.dataset.v === UI.tab) { const p = $app.querySelector(`.pagina[data-tab="${UI.tab}"]`); p && p.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    irATab(i);
+  },
   dia(el) { const d = new Date(UI.dia); d.setDate(d.getDate() + +el.dataset.v); UI.dia = d.getTime(); render(); },
   cerrarHoja,
   // Registros
